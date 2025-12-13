@@ -40,8 +40,15 @@ async function run() {
             const cursor = booksCollection.find(query);
             const result = await cursor.toArray();
             res.send(result);
-
         })
+
+        // Latest Books
+        app.get('/latest-books', async (req, res) => {
+
+            const result = await booksCollection.find({}).sort({ createdAt: -1 }).limit(6).toArray();
+            res.send(result);
+
+        });
 
 
 
