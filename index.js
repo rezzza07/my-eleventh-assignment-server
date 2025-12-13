@@ -34,6 +34,14 @@ async function run() {
         const booksCollection = db.collection('books');
 
         // Books API
+        app.get('/books', async (req, res) => {
+            const query = {};
+
+            const cursor = booksCollection.find(query);
+            const result = await cursor.toArray();
+            res.send(result);
+
+        })
 
 
 
