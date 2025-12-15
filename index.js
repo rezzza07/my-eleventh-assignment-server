@@ -85,7 +85,11 @@ async function run() {
             const result = await booksCollection.insertOne(book);
             res.send(result);
         })
-        
+        app.post('/coverage', async (req, res) => {
+            const coverage = req.body;
+            const result = await coverageCollection.insertOne(coverage);
+            res.send(result);
+        });
 
 
 
