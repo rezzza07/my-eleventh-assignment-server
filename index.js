@@ -3,7 +3,7 @@ const cors = require('cors')
 const app = express()
 require('dotenv').config();
 const port = process.env.PORT || 3000
-const { MongoClient, ServerApiVersion } = require('mongodb');
+const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 
 
 // middleware
@@ -32,6 +32,7 @@ async function run() {
 
         const db = client.db("book_courier_db");
         const booksCollection = db.collection('books');
+        const coverageCollection = db.collection('coverage');
 
         // Books API
         app.get('/books', async (req, res) => {
@@ -50,6 +51,25 @@ async function run() {
 
         });
 
+        // Book Details
+        app.get('/books/:id', async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) };
+
+            const result = await booksCollection.findOne(query);
+            res.send(result);
+        });
+
+        // Coverage
+        app.get('/coverage', async (req, res) => {
+            const query = {};
+
+            const cursor = coverageCollection.find(query);
+            const result = await cursor.toArray();
+            res.send(result);
+        })
+
+
 
 
 
@@ -65,6 +85,8 @@ async function run() {
             const result = await booksCollection.insertOne(book);
             res.send(result);
         })
+        
+
 
 
 
