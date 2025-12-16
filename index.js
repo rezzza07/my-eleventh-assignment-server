@@ -33,6 +33,7 @@ async function run() {
         const db = client.db("book_courier_db");
         const booksCollection = db.collection('books');
         const coverageCollection = db.collection('coverage');
+        const courierCollection = db.collection('courier');
 
         // Books API
         app.get('/books', async (req, res) => {
@@ -84,10 +85,16 @@ async function run() {
             const book = req.body;
             const result = await booksCollection.insertOne(book);
             res.send(result);
+        });
+        // Courier Post
+        app.post('/books', async (req, res) => {
+            const book = req.body;
+            const result = await booksCollection.insertOne(book);
+            res.send(result);
         })
-        app.post('/coverage', async (req, res) => {
-            const coverage = req.body;
-            const result = await coverageCollection.insertOne(coverage);
+        app.post('/courier', async (req, res) => {
+            const courier = req.body;
+            const result = await courierCollection.insertOne(courier);
             res.send(result);
         });
 
