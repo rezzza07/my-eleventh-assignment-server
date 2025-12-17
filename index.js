@@ -98,6 +98,20 @@ async function run() {
             res.send(result);
         });
 
+        app.get('/courier', async (req, res) => {
+            const query = {};
+
+            const { email } = req.query;
+            if (email) {
+                query.senderEmail = email;
+            }
+
+            const cursor = courierCollection.find(query);
+            const result = await cursor.toArray();
+            res.send(result);
+
+        })
+
 
 
 
