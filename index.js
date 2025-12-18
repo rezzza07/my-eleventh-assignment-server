@@ -94,6 +94,7 @@ async function run() {
         })
         app.post('/courier', async (req, res) => {
             const courier = req.body;
+            courier.createdAt = new Date();
             const result = await courierCollection.insertOne(courier);
             res.send(result);
         });
@@ -110,6 +111,14 @@ async function run() {
             const result = await cursor.toArray();
             res.send(result);
 
+        })
+
+        // Courier Delete
+        app.delete('/courier/:id', async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const result = await courierCollection.deleteOne(query);
+            res.send(result);
         })
 
 
