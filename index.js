@@ -153,12 +153,32 @@ async function run() {
                 metadata: {
                     orderId: paymentInfo.orderId,
                 },
-                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                 cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
             });
 
-            
-            res.json({ url: session.url });
+
+            res.send({ url: session.url });
+        });
+
+        // Payment Success
+        app.patch('/payment-success', async (req, res) => {
+            const sessionId = req.query.session_id;
+
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+
+            if (session.payment_status === 'paid') {
+                const id = session.metadata.orderId;
+                const query = { _id: new ObjectId(id) };
+                const update = {
+                    $set: { paymentStatus: 'paid' },
+                };
+
+                const result = await courierCollection.updateOne(query, update);
+                return res.send({ success: true, result });
+            }
+
+            res.status(400).send({ success: false });
         });
 
 
