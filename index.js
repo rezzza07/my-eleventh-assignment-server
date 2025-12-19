@@ -6,6 +6,27 @@ const port = process.env.PORT || 3000
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
+const crypto = require('crypto');
+
+function generateOrderTraceId() {
+    const prefix = 'ORDR';
+
+
+    const date = new Date()
+        .toISOString()
+        .slice(0, 10)
+        .replace(/-/g, '');
+
+
+    const random = crypto
+        .randomBytes(5)
+        .toString('base64')
+        .replace(/[^A-Z0-9]/g, '')
+        .slice(0, 8);
+
+    return `${prefix}-${date}-${random}`;
+}
+
 // middleware
 app.use(express.json());
 app.use(cors());
@@ -34,6 +55,7 @@ async function run() {
         const booksCollection = db.collection('books');
         const coverageCollection = db.collection('coverage');
         const courierCollection = db.collection('courier');
+        const paymentCollection = db.collection('payments')
 
         // Books API
         app.get('/books', async (req, res) => {
@@ -152,6 +174,7 @@ async function run() {
                 mode: 'payment',
                 metadata: {
                     orderId: paymentInfo.orderId,
+                    bookName: paymentInfo.bookName
                 },
                 success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                 cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
@@ -163,23 +186,56 @@ async function run() {
 
         // Payment Success
         app.patch('/payment-success', async (req, res) => {
-            const sessionId = req.query.session_id;
+            try {
+                const sessionId = req.query.session_id;
 
-            const session = await stripe.checkout.sessions.retrieve(sessionId);
+                const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-            if (session.payment_status === 'paid') {
-                const id = session.metadata.orderId;
-                const query = { _id: new ObjectId(id) };
+                const trackingId = generateOrderTraceId()
+
+                if (session.payment_status !== 'paid') {
+                    return res.status(400).send({ success: false });
+                }
+
+                const orderId = session.metadata.orderId;
+
+                const query = { _id: new ObjectId(orderId) };
+
                 const update = {
-                    $set: { paymentStatus: 'paid' },
+                    $set: {
+                        paymentStatus: 'paid',
+                        trackingId: trackingId,
+                    },
                 };
 
-                const result = await courierCollection.updateOne(query, update);
-                return res.send({ success: true, result });
-            }
+                const updateResult = await courierCollection.updateOne(query, update);
 
-            res.status(400).send({ success: false });
+                const payment = {
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    customerEmail: session.customer_email, 
+                    orderId,
+                    bookName: session.metadata.bookName,
+                    transactionId: session.payment_intent,
+                    paymentStatus: session.payment_status,
+                    paidAt: new Date(),
+                };
+
+                const paymentResult = await paymentCollection.insertOne(payment);
+
+                res.send({
+                    success: true,
+                    modifyOrder: updateResult,
+                    trackingId:trackingId,
+                    transactionId: session.payment_intent,
+                    paymentInfo: paymentResult,
+                });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ success: false, message: 'Payment processing failed' });
+            }
         });
+
 
 
 
