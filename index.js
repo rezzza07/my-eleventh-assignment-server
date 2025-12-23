@@ -193,6 +193,125 @@ async function run() {
         })
         
 
+        // Add a book***********
+        app.post('/my-books', verifyFBToken, async (req, res) => {
+            const book = req.body;
+            book.createdAt = new Date();
+            book.addedBy = req.decoded_email;
+
+            const result = await booksCollection.insertOne(book);
+            res.send({
+                success: true,
+                message: 'Book added successfully',
+                bookId: result.insertedId
+            });
+        });
+
+        // Get all books added by the logged-in librarian*************
+        app.get('/my-books', verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+            const books = await booksCollection.find({ addedBy: email }).toArray();
+            res.send(books);
+        });
+
+        app.get('/my-books/:id', verifyFBToken, async (req, res) => {
+            const { id } = req.params;
+            const email = req.decoded_email;
+
+            try {
+                const book = await booksCollection.findOne({ _id: new ObjectId(id), addedBy: email });
+                if (!book) {
+                    return res.status(404).send({ message: 'Book not found' });
+                }
+                res.send(book);
+            } catch (error) {
+                res.status(500).send({ message: 'Server error' });
+            }
+        });
+
+
+        // Update a book by id************
+        app.patch('/my-books/:id', verifyFBToken, async (req, res) => {
+            const { id } = req.params;
+            const email = req.decoded_email;
+
+            const { name, author, image, price, status } = req.body;
+
+            if (!['published', 'unpublished'].includes(status)) {
+                return res.status(400).send({ message: 'Invalid status' });
+            }
+
+            const result = await booksCollection.updateOne(
+                { _id: new ObjectId(id), addedBy: email },
+                {
+                    $set: {
+                        name,
+                        author,
+                        image,
+                        price,
+                        status,
+                        updatedAt: new Date(),
+                    },
+                }
+            );
+
+            if (result.matchedCount === 0) {
+                return res.status(403).send({ message: 'Unauthorized' });
+            }
+
+            res.send({ success: true });
+        });
+
+
+        app.get('/my-orders', verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+
+            // Get all books added by this librarian
+            const books = await booksCollection.find({ addedBy: email }).toArray();
+            const bookIds = books.map(b => b._id);
+
+            // Find orders for these books
+            const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
+            res.send(orders);
+        });
+
+
+        // Update order status
+        app.patch('/orders/:id/status', verifyFBToken, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { status } = req.body;
+
+                if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: 'Invalid order ID' });
+                if (!['pending', 'shipped', 'delivered'].includes(status))
+                    return res.status(400).send({ success: false, message: 'Invalid status' });
+
+                const result = await ordersCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { status } }
+                );
+
+                res.send({ success: true, result });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ success: false, message: 'Server error' });
+            }
+        });
+
+        // Cancel order
+        app.delete('/orders/:id', verifyFBToken, async (req, res) => {
+            try {
+                const { id } = req.params;
+                if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: 'Invalid order ID' });
+
+                const result = await ordersCollection.deleteOne({ _id: new ObjectId(id) });
+                res.send({ success: true, result });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ success: false, message: 'Server error' });
+            }
+        });
+
 
 
 
