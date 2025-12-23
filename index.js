@@ -8,6 +8,17 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET);
 
 const crypto = require('crypto');
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./book-courier-project-firebase-adminsdk.json");
+
+
+
+admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+});
+
+
 function generateOrderTraceId() {
     const prefix = 'ORDR';
 
@@ -31,11 +42,28 @@ function generateOrderTraceId() {
 app.use(express.json());
 app.use(cors());
 
+const verifyFBToken = async (req, res, next) => {
+    const token = req.headers.authorization;
+
+    if (!token) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+    try {
+        const idToken = token.split(' ')[1];
+        const decoded = await admin.auth().verifyIdToken(idToken);
+        console.log(decoded)
+        req.decoded_email = decoded.email;
+        next();
+    }
+    catch (err) {
+        return res.status(401).send({ message: 'unauthorized access' })
+    }
+
+}
+
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ilappos.mongodb.net/?appName=Cluster0`;
 
 
-
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
@@ -47,15 +75,87 @@ const client = new MongoClient(uri, {
 
 async function run() {
     try {
-        // Connect the client to the server	(optional starting in v4.7)
         await client.connect();
 
 
         const db = client.db("book_courier_db");
+        const userCollection = db.collection('users');
         const booksCollection = db.collection('books');
         const coverageCollection = db.collection('coverage');
         const courierCollection = db.collection('courier');
         const paymentCollection = db.collection('payments')
+        const librarianCollection = db.collection('librarian')
+
+        // Middle admin before allowing admin activity
+        const verifyAdmin = async (req, res, next) => {
+            const email = req.decoded_email;
+            const query = { email };
+            const user = await userCollection.findOne(query);
+
+            if (!user || user.role !== 'admin') {
+                return res.status(403).send({ message: ' forbidden access' });
+            }
+
+            next();
+        }
+
+        // User related APIs
+        app.get('/users', verifyFBToken, async (req, res) => {
+            const { searchText } = req.query;
+
+            let query = {};
+
+            if (searchText) {
+                query = {
+                    $or: [
+                        { displayName: { $regex: searchText, $options: 'i' } },
+                        { email: { $regex: searchText, $options: 'i' } }
+                    ]
+                };
+            }
+
+            const result = await userCollection
+                .find(query)
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .toArray();
+
+            res.send(result);
+        });
+
+
+        app.get('/users/:id', async (req, res) => {
+
+        })
+
+        app.get('/users/:email/role', async (req, res) => {
+            const email = req.params.email;
+            const query = { email };
+
+            const user = await userCollection.findOne(query);
+            res.send({ role: user?.role || 'user' });
+        })
+
+        app.post('/users', async (req, res) => {
+            const user = req.body;
+            user.role = 'user';
+            user.createdAt = new Date();
+
+            const email = user.email;
+            const userExists = await userCollection.findOne({ email })
+
+            if (userExists) {
+                return res.send({ message: 'user exists' })
+            }
+
+            const result = await userCollection.insertOne(user);
+            res.send(result);
+        });
+
+
+
+
+
 
         // Books API
         app.get('/books', async (req, res) => {
@@ -91,8 +191,124 @@ async function run() {
             const result = await cursor.toArray();
             res.send(result);
         })
+        // Add a book***********
+        app.post('/my-books', verifyFBToken, async (req, res) => {
+            const book = req.body;
+            book.createdAt = new Date();
+            book.addedBy = req.decoded_email;
+
+            const result = await booksCollection.insertOne(book);
+            res.send({
+                success: true,
+                message: 'Book added successfully',
+                bookId: result.insertedId
+            });
+        });
+
+        // Get all books added by the logged-in librarian*************
+        app.get('/my-books', verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+            const books = await booksCollection.find({ addedBy: email }).toArray();
+            res.send(books);
+        });
+
+        app.get('/my-books/:id', verifyFBToken, async (req, res) => {
+            const { id } = req.params;
+            const email = req.decoded_email;
+
+            try {
+                const book = await booksCollection.findOne({ _id: new ObjectId(id), addedBy: email });
+                if (!book) {
+                    return res.status(404).send({ message: 'Book not found' });
+                }
+                res.send(book);
+            } catch (error) {
+                res.status(500).send({ message: 'Server error' });
+            }
+        });
 
 
+        // Update a book by id************
+        app.patch('/my-books/:id', verifyFBToken, async (req, res) => {
+            const { id } = req.params;
+            const email = req.decoded_email;
+
+            const { name, author, image, price, status } = req.body;
+
+            if (!['published', 'unpublished'].includes(status)) {
+                return res.status(400).send({ message: 'Invalid status' });
+            }
+
+            const result = await booksCollection.updateOne(
+                { _id: new ObjectId(id), addedBy: email },
+                {
+                    $set: {
+                        name,
+                        author,
+                        image,
+                        price,
+                        status,
+                        updatedAt: new Date(),
+                    },
+                }
+            );
+
+            if (result.matchedCount === 0) {
+                return res.status(403).send({ message: 'Unauthorized' });
+            }
+
+            res.send({ success: true });
+        });
+
+
+        app.get('/my-orders', verifyFBToken, async (req, res) => {
+            const email = req.decoded_email;
+
+            // Get all books added by this librarian
+            const books = await booksCollection.find({ addedBy: email }).toArray();
+            const bookIds = books.map(b => b._id);
+
+            // Find orders for these books
+            const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
+            res.send(orders);
+        });
+
+
+        // Update order status
+        app.patch('/orders/:id/status', verifyFBToken, async (req, res) => {
+            try {
+                const { id } = req.params;
+                const { status } = req.body;
+
+                if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: 'Invalid order ID' });
+                if (!['pending', 'shipped', 'delivered'].includes(status))
+                    return res.status(400).send({ success: false, message: 'Invalid status' });
+
+                const result = await ordersCollection.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $set: { status } }
+                );
+
+                res.send({ success: true, result });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ success: false, message: 'Server error' });
+            }
+        });
+
+        // Cancel order
+        app.delete('/orders/:id', verifyFBToken, async (req, res) => {
+            try {
+                const { id } = req.params;
+                if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: 'Invalid order ID' });
+
+                const result = await ordersCollection.deleteOne({ _id: new ObjectId(id) });
+                res.send({ success: true, result });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ success: false, message: 'Server error' });
+            }
+        });
 
 
 
@@ -151,6 +367,56 @@ async function run() {
         })
 
 
+        // Librarian Related Apis
+
+        app.get('/librarian', async (req, res) => {
+            const query = {};
+            if (req.query.status) {
+                query.status = req.query.status;
+            }
+
+            const cursor = librarianCollection.find(query);
+            const result = await cursor.toArray();
+            res.send(result);
+        })
+
+        app.post('/librarian', async (req, res) => {
+            const librarian = req.body;
+            librarian.status = 'Pending'
+            librarian.createdAt = new Date();
+            const result = await librarianCollection.insertOne(librarian);
+            res.send(result);
+        });
+
+        app.patch('/librarian/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            const status = req.body.status;
+            const id = req.params.id;
+            const query = { _id: new ObjectId((id)) }
+            const updateDoc = {
+                $set: {
+                    status: status
+                }
+            }
+            const result = await librarianCollection.updateOne(query, updateDoc);
+            if (status === 'Approved') {
+                const email = req.body.email;
+                const userQuery = { email }
+                const updateUser = {
+                    $set: {
+                        role: 'librarian'
+                    }
+                }
+                const userResult = await userCollection.updateOne(userQuery, updateUser);
+            }
+            res.send(result);
+        })
+
+        app.delete('/librarian/:id', async (req, res) => {
+            const id = req.params.id;
+            const query = { _id: new ObjectId(id) }
+            const result = await librarianCollection.deleteOne(query);
+            res.send(result);
+        })
 
         // Payment related APIs
         app.post('/create-checkout-session', async (req, res) => {
@@ -191,52 +457,86 @@ async function run() {
 
                 const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-                const trackingId = generateOrderTraceId()
+                const transactionId = session.payment_intent;
+
+
+                const paymentQuery = { transactionId };
+                const paymentExist = await paymentCollection.findOne(paymentQuery);
+
+                if (paymentExist) {
+                    return res.send({
+                        message: 'already exists',
+                        transactionId,
+                        trackingId: paymentExist.trackingId
+                    });
+                }
 
                 if (session.payment_status !== 'paid') {
                     return res.status(400).send({ success: false });
                 }
 
+                const trackingId = generateOrderTraceId();
                 const orderId = session.metadata.orderId;
 
-                const query = { _id: new ObjectId(orderId) };
+
+                const orderQuery = { _id: new ObjectId(orderId) };
 
                 const update = {
                     $set: {
                         paymentStatus: 'paid',
-                        trackingId: trackingId,
+                        trackingId,
                     },
                 };
 
-                const updateResult = await courierCollection.updateOne(query, update);
+                const updateResult = await courierCollection.updateOne(orderQuery, update);
 
                 const payment = {
                     amount: session.amount_total / 100,
                     currency: session.currency,
-                    customerEmail: session.customer_email, 
+                    customerEmail: session.customer_email,
                     orderId,
                     bookName: session.metadata.bookName,
-                    transactionId: session.payment_intent,
+                    transactionId,
                     paymentStatus: session.payment_status,
                     paidAt: new Date(),
+                    trackingId: trackingId
                 };
 
-                const paymentResult = await paymentCollection.insertOne(payment);
+                await paymentCollection.insertOne(payment);
 
                 res.send({
                     success: true,
-                    modifyOrder: updateResult,
-                    trackingId:trackingId,
-                    transactionId: session.payment_intent,
-                    paymentInfo: paymentResult,
+                    trackingId,
+                    transactionId,
                 });
             } catch (err) {
                 console.error(err);
-                res.status(500).send({ success: false, message: 'Payment processing failed' });
+                res.status(500).send({
+                    success: false,
+                    message: 'Payment processing failed',
+                });
             }
         });
 
+        // My Payments
 
+        app.get('/payments', verifyFBToken, async (req, res) => {
+
+            const email = req.query.email;
+            const query = {};
+            if (email) {
+                query.customerEmail = email;
+
+                if (email !== req.decoded_email) {
+                    return res.status(403).send({ message: 'forbidden access' })
+                }
+            }
+
+            const cursor = paymentCollection.find(query).sort({ paidAt: -1 });
+            const result = await cursor.toArray();
+            res.send(result);
+
+        })
 
 
 
