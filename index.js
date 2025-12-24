@@ -83,8 +83,12 @@ async function run() {
         const booksCollection = db.collection('books');
         const coverageCollection = db.collection('coverage');
         const courierCollection = db.collection('courier');
-        const paymentCollection = db.collection('payments')
-        const librarianCollection = db.collection('librarian')
+        const paymentCollection = db.collection('payments');
+        const librarianCollection = db.collection('librarian');
+        const ordersCollection = db.collection('orders');
+        const wishlistCollection = db.collection('wishlists');
+
+
 
         // Middle admin before allowing admin activity
         const verifyAdmin = async (req, res, next) => {
@@ -191,7 +195,7 @@ async function run() {
             const result = await cursor.toArray();
             res.send(result);
         })
-        
+
 
         // Add a book***********
         app.post('/my-books', verifyFBToken, async (req, res) => {
@@ -230,12 +234,35 @@ async function run() {
         });
 
 
+        // Create an order
+        app.post('/orders', verifyFBToken, async (req, res) => {
+            const { bookId, buyerEmail, price, bookName, bookImage } = req.body;
+
+            if (!ObjectId.isValid(bookId))
+                return res.status(400).send({ success: false, message: 'Invalid book ID' });
+
+            const order = {
+                bookId,
+                bookName,
+                bookImage,
+                buyerEmail,
+                price,
+                status: 'pending',
+                paymentStatus: 'unpaid',
+                createdAt: new Date()
+            };
+
+            const result = await ordersCollection.insertOne(order);
+            res.send({ success: true, orderId: result.insertedId });
+        });
+
+
         // Update a book by id************
         app.patch('/my-books/:id', verifyFBToken, async (req, res) => {
             const { id } = req.params;
             const email = req.decoded_email;
 
-            const { name, author, image, price, status } = req.body;
+            const { name, author, image, price, status, description } = req.body;
 
             if (!['published', 'unpublished'].includes(status)) {
                 return res.status(400).send({ message: 'Invalid status' });
@@ -249,6 +276,7 @@ async function run() {
                         author,
                         image,
                         price,
+                        description, // ✅ ADD THIS
                         status,
                         updatedAt: new Date(),
                     },
@@ -263,56 +291,177 @@ async function run() {
         });
 
 
-        app.get('/my-orders', verifyFBToken, async (req, res) => {
+        app.get('/librarian/orders', verifyFBToken, async (req, res) => {
             const email = req.decoded_email;
-
-            // Get all books added by this librarian
             const books = await booksCollection.find({ addedBy: email }).toArray();
-            const bookIds = books.map(b => b._id);
-
-            // Find orders for these books
+            const bookIds = books.map(b => b._id.toString());
             const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
             res.send(orders);
         });
 
 
-        // Update order status
-        app.patch('/orders/:id/status', verifyFBToken, async (req, res) => {
-            try {
-                const { id } = req.params;
-                const { status } = req.body;
 
-                if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: 'Invalid order ID' });
-                if (!['pending', 'shipped', 'delivered'].includes(status))
-                    return res.status(400).send({ success: false, message: 'Invalid status' });
+
+
+        // ----------------------
+        // Get all orders for librarian's books
+        // ----------------------
+        app.get('/librarian/orders', verifyFBToken, async (req, res) => {
+            try {
+                const email = req.decoded_email;
+
+                // Get all books added by this librarian
+                const books = await booksCollection.find({ addedBy: email }).toArray();
+                const bookIds = books.map(b => b._id.toString());
+
+                // Fetch orders for these books
+                const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
+
+                res.send(orders);
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: 'Failed to fetch orders' });
+            }
+        });
+
+        // ----------------------
+        // Update order status
+        // ----------------------
+        app.patch('/orders/:id/status', verifyFBToken, async (req, res) => {
+            const orderId = req.params.id;
+            const email = req.decoded_email;
+            const { status } = req.body;
+
+            if (!ObjectId.isValid(orderId))
+                return res.status(400).send({ success: false, message: 'Invalid order ID' });
+
+            if (!['pending', 'shipped', 'delivered'].includes(status))
+                return res.status(400).send({ success: false, message: 'Invalid status' });
+
+            try {
+                // Check if the librarian owns the book for this order
+                const order = await ordersCollection.findOne({ _id: new ObjectId(orderId) });
+                if (!order) {
+                    return res.status(404).send({ message: 'Order not found' });
+                }
+
+                const book = await booksCollection.findOne({ _id: new ObjectId(order.bookId), addedBy: email });
+                if (!book) {
+                    return res.status(403).send({ message: 'Unauthorized' });
+                }
+
+                // Prevent invalid transitions (e.g., delivered back to pending)
+                const allowedTransitions = {
+                    pending: ['shipped'],
+                    shipped: ['delivered'],
+                    delivered: [],
+                };
+
+                if (!allowedTransitions[order.status]?.includes(status)) {
+                    return res.status(400).send({ message: 'Invalid status transition' });
+                }
 
                 const result = await ordersCollection.updateOne(
-                    { _id: new ObjectId(id) },
-                    { $set: { status } }
+                    { _id: new ObjectId(orderId) },
+                    { $set: { status, updatedAt: new Date() } }
                 );
 
                 res.send({ success: true, result });
-            } catch (err) {
-                console.error(err);
-                res.status(500).send({ success: false, message: 'Server error' });
+            } catch (error) {
+                res.status(500).send({ message: 'Server error' });
             }
         });
 
+        // ----------------------
         // Cancel order
+        // ----------------------
         app.delete('/orders/:id', verifyFBToken, async (req, res) => {
-            try {
-                const { id } = req.params;
-                if (!ObjectId.isValid(id)) return res.status(400).send({ success: false, message: 'Invalid order ID' });
+            const orderId = req.params.id;
+            const email = req.decoded_email;
 
-                const result = await ordersCollection.deleteOne({ _id: new ObjectId(id) });
+            if (!ObjectId.isValid(orderId))
+                return res.status(400).send({ success: false, message: 'Invalid order ID' });
+
+            try {
+                // Check if the librarian owns the book for this order
+                const order = await ordersCollection.findOne({ _id: new ObjectId(orderId) });
+                if (!order) {
+                    return res.status(404).send({ message: 'Order not found' });
+                }
+
+                const book = await booksCollection.findOne({ _id: new ObjectId(order.bookId), addedBy: email });
+                if (!book) {
+                    return res.status(403).send({ message: 'Unauthorized' });
+                }
+
+                // Prevent canceling delivered orders
+                if (order.status === 'delivered') {
+                    return res.status(400).send({ message: 'Cannot cancel delivered order' });
+                }
+
+                const result = await ordersCollection.deleteOne({ _id: new ObjectId(orderId) });
                 res.send({ success: true, result });
-            } catch (err) {
-                console.error(err);
-                res.status(500).send({ success: false, message: 'Server error' });
+            } catch (error) {
+                res.status(500).send({ message: 'Server error' });
             }
         });
 
 
+
+        // ----------------- Add to Wishlist --------------ঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃ
+        app.post('/wishlist', async (req, res) => {
+            const { userId, bookId } = req.body;
+            if (!userId || !bookId) return res.status(400).send({ message: 'Missing userId or bookId' });
+
+
+            const bookObjectId = new ObjectId(bookId);
+
+            const exists = await wishlistCollection.findOne({ userId, bookId: bookObjectId });
+            if (exists) return res.status(400).send({ message: 'Book already in wishlist' });
+
+            const result = await wishlistCollection.insertOne({
+                userId,
+                bookId: bookObjectId,
+                createdAt: new Date()
+            });
+            res.send(result);
+        });
+
+
+        // User Wishlist 
+        app.get('/wishlist/:userId', async (req, res) => {
+            const { userId } = req.params;
+
+            const wishlist = await wishlistCollection.aggregate([
+                { $match: { userId } },
+                {
+                    $lookup: {
+                        from: 'books',
+                        localField: 'bookId',
+                        foreignField: '_id',
+                        as: 'bookDetails'
+                    }
+                },
+                { $unwind: '$bookDetails' },
+                { $replaceRoot: { newRoot: '$bookDetails' } }
+            ]).toArray();
+
+            res.send(wishlist);
+        });
+
+        // Remove from Wishlist 
+        app.delete('/wishlist/:userId/:bookId', async (req, res) => {
+            const { userId, bookId } = req.params;
+            const result = await wishlistCollection.deleteOne({
+                userId,
+                bookId: new ObjectId(bookId)
+            });
+
+            if (result.deletedCount === 0)
+                return res.status(404).send({ message: 'Book not found in wishlist' });
+
+            res.send({ message: 'Book removed from wishlist' });
+        });
 
 
 
