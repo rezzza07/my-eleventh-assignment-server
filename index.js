@@ -463,6 +463,39 @@ async function run() {
             res.send({ message: 'Book removed from wishlist' });
         });
 
+        // Publish/Unpublish a book
+        app.patch('/books/:id/status', verifyFBToken, verifyAdmin, async (req, res) => {
+            const { id } = req.params;
+            const { status } = req.body; // 'published' or 'unpublished'
+
+            if (!['published', 'unpublished'].includes(status))
+                return res.status(400).send({ message: 'Invalid status' });
+
+            const result = await booksCollection.updateOne(
+                { _id: new ObjectId(id) },
+                { $set: { status, updatedAt: new Date() } }
+            );
+
+            res.send({ success: true });
+        });
+
+        // Delete a book + all its orders
+        app.delete('/books/:id', verifyFBToken, verifyAdmin, async (req, res) => {
+            const { id } = req.params;
+
+            try {
+                await booksCollection.deleteOne({ _id: new ObjectId(id) });
+                const ordersDeleted = await ordersCollection.deleteMany({ bookId: id });
+
+                res.send({
+                    success: true,
+                    message: `Book deleted. ${ordersDeleted.deletedCount} related orders removed.`,
+                });
+            } catch (err) {
+                res.status(500).send({ message: 'Failed to delete book' });
+            }
+        });
+
 
 
 
