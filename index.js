@@ -466,8 +466,7 @@ async function run() {
         // Publish/Unpublish a book
         app.patch('/books/:id/status', verifyFBToken, verifyAdmin, async (req, res) => {
             const { id } = req.params;
-            const { status } = req.body; // 'published' or 'unpublished'
-
+            const { status } = req.body;
             if (!['published', 'unpublished'].includes(status))
                 return res.status(400).send({ message: 'Invalid status' });
 
@@ -721,6 +720,156 @@ async function run() {
             res.send(result);
 
         })
+
+        app.get("/dashboard/user", verifyFBToken, async (req, res) => {
+            try {
+                const email = req.decoded_email;
+
+                const data = await courierCollection.aggregate([
+                    { $match: { senderEmail: email } },
+                    {
+                        $facet: {
+                            stats: [
+                                {
+                                    $group: {
+                                        _id: null,
+                                        totalOrders: { $sum: 1 },
+                                        pendingOrders: {
+                                            $sum: { $cond: [{ $eq: ["$paymentStatus", "pending"] }, 1, 0] },
+                                        },
+                                        totalSpent: {
+                                            $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, "$cost", 0] },
+                                        },
+                                    },
+                                },
+                            ],
+                            recentOrders: [
+                                { $sort: { createdAt: -1 } },
+                                { $limit: 5 },
+                                {
+                                    $project: {
+                                        _id: 1,
+                                        bookName: 1,
+                                        cost: 1,
+                                        paymentStatus: 1,
+                                        createdAt: 1,
+                                    },
+                                },
+                            ],
+                        },
+                    },
+                ]).toArray();
+
+                const stats = (data[0] && data[0].stats[0]) || {
+                    totalOrders: 0,
+                    pendingOrders: 0,
+                    totalSpent: 0,
+                };
+
+                const recentOrders = (data[0] && data[0].recentOrders) || [];
+
+                res.send({ stats, recentOrders });
+            } catch (error) {
+                console.error(error);
+                res.status(500).send({ message: "Failed to fetch user dashboard", error: error.message });
+            }
+        });
+
+
+
+        app.get('/dashboard/librarian', verifyFBToken, async (req, res) => {
+            try {
+                const email = req.decoded_email;
+
+
+                const books = await booksCollection.find({ addedBy: email }).toArray();
+                const bookIds = books.map(b => b._id.toString());
+
+
+                const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
+
+
+                const stats = {
+                    totalBooks: books.length,
+                    totalOrders: orders.length,
+                    totalRevenue: orders.reduce((sum, o) => sum + Number(o.price || 0), 0),
+                };
+
+
+                const recentOrders = orders
+                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                    .slice(0, 5)
+                    .map(o => ({
+                        _id: o._id,
+                        bookName: o.bookName,
+                        userName: o.buyerEmail,
+                        price: Number(o.price),
+                        status: o.status,
+                        createdAt: o.createdAt,
+                    }));
+
+
+                const recentBooks = books
+                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                    .slice(0, 5)
+                    .map(b => ({
+                        _id: b._id,
+                        title: b.name || b.title,
+                        author: b.author,
+                        price: Number(b.price || 0),
+                        createdAt: b.createdAt,
+                    }));
+
+                res.send({ stats, recentOrders, recentBooks });
+            } catch (err) {
+                console.error(err);
+                res.status(500).send({ message: 'Failed to fetch dashboard data' });
+            }
+        });
+
+        app.get('/dashboard/admin', verifyFBToken, verifyAdmin, async (req, res) => {
+            const [users, librarians, books] = await Promise.all([
+                userCollection.countDocuments(),
+                userCollection.countDocuments({ role: "librarian" }),
+                booksCollection.countDocuments()
+            ]);
+
+            const ordersAgg = await ordersCollection.aggregate([
+                {
+                    $facet: {
+                        revenue: [
+                            { $match: { paymentStatus: "paid" } },
+                            { $group: { _id: null, totalRevenue: { $sum: "$price" } } }
+                        ],
+                        ordersByStatus: [
+                            {
+                                $group: {
+                                    _id: "$status",
+                                    count: { $sum: 1 }
+                                }
+                            }
+                        ]
+                    }
+                }
+            ]).toArray();
+
+            const recentPayments = await paymentCollection
+                .find({})
+                .sort({ paidAt: -1 })
+                .limit(5)
+                .toArray();
+
+            res.send({
+                users,
+                librarians,
+                books,
+                totalRevenue: ordersAgg[0].revenue[0]?.totalRevenue || 0,
+                ordersByStatus: ordersAgg[0].ordersByStatus,
+                recentPayments
+            });
+        });
+
+
 
 
 
