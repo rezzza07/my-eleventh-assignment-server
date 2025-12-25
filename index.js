@@ -1,40 +1,28 @@
-const express = require('express')
-const cors = require('cors')
-const app = express()
+const express = require('express');
+const cors = require('cors');
+const app = express();
 require('dotenv').config();
 const port = process.env.PORT || 3000
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 const stripe = require('stripe')(process.env.STRIPE_SECRET);
-
 const crypto = require('crypto');
-
 const admin = require("firebase-admin");
-
-const serviceAccount = require("./book-courier-project-firebase-adminsdk.json");
-
-
-
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, 'base64').toString('utf8')
+const serviceAccount = JSON.parse(decoded);
 admin.initializeApp({
     credential: admin.credential.cert(serviceAccount)
 });
-
-
 function generateOrderTraceId() {
     const prefix = 'ORDR';
-
-
     const date = new Date()
         .toISOString()
         .slice(0, 10)
         .replace(/-/g, '');
-
-
     const random = crypto
         .randomBytes(5)
         .toString('base64')
         .replace(/[^A-Z0-9]/g, '')
         .slice(0, 8);
-
     return `${prefix}-${date}-${random}`;
 }
 
@@ -44,14 +32,12 @@ app.use(cors());
 
 const verifyFBToken = async (req, res, next) => {
     const token = req.headers.authorization;
-
     if (!token) {
         return res.status(401).send({ message: 'unauthorized access' })
     }
     try {
         const idToken = token.split(' ')[1];
         const decoded = await admin.auth().verifyIdToken(idToken);
-        console.log(decoded)
         req.decoded_email = decoded.email;
         next();
     }
@@ -60,10 +46,7 @@ const verifyFBToken = async (req, res, next) => {
     }
 
 }
-
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.ilappos.mongodb.net/?appName=Cluster0`;
-
-
 const client = new MongoClient(uri, {
     serverApi: {
         version: ServerApiVersion.v1,
@@ -72,12 +55,9 @@ const client = new MongoClient(uri, {
     }
 });
 
-
 async function run() {
     try {
         await client.connect();
-
-
         const db = client.db("book_courier_db");
         const userCollection = db.collection('users');
         const booksCollection = db.collection('books');
@@ -90,7 +70,7 @@ async function run() {
 
 
 
-        // Middle admin before allowing admin activity
+        // Admin Verification
         const verifyAdmin = async (req, res, next) => {
             const email = req.decoded_email;
             const query = { email };
@@ -276,7 +256,7 @@ async function run() {
                         author,
                         image,
                         price,
-                        description, // ✅ ADD THIS
+                        description, 
                         status,
                         updatedAt: new Date(),
                     },
@@ -339,7 +319,7 @@ async function run() {
                 return res.status(400).send({ success: false, message: 'Invalid status' });
 
             try {
-                // Check if the librarian owns the book for this order
+              
                 const order = await ordersCollection.findOne({ _id: new ObjectId(orderId) });
                 if (!order) {
                     return res.status(404).send({ message: 'Order not found' });
@@ -350,7 +330,7 @@ async function run() {
                     return res.status(403).send({ message: 'Unauthorized' });
                 }
 
-                // Prevent invalid transitions (e.g., delivered back to pending)
+               
                 const allowedTransitions = {
                     pending: ['shipped'],
                     shipped: ['delivered'],
@@ -877,8 +857,8 @@ async function run() {
 
 
         // Send a ping to confirm a successful connection
-        await client.db("admin").command({ ping: 1 });
-        console.log("Pinged your deployment. You successfully connected to MongoDB!");
+        // await client.db("admin").command({ ping: 1 });
+        // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
         // Ensures that the client will close when you finish/error
         // await client.close();
@@ -893,3 +873,4 @@ app.get('/', (req, res) => {
 app.listen(port, () => {
     console.log(`Example app listening on port ${port}`)
 })
+

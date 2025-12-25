@@ -1,3 +1,5 @@
 node_modules/
 .env
 book-courier-project-firebase-adminsdk.json
+
+.vercel
