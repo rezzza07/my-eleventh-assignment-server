@@ -138,7 +138,33 @@ async function run() {
 
 
 
+        app.patch('/users/:id/role', verifyFBToken, verifyAdmin, async (req, res) => {
+            const id = req.params.id;
+            const { role } = req.body;
 
+
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).send({ message: "Invalid User ID format" });
+            }
+
+            const filter = { _id: new ObjectId(id) };
+            const updateDoc = {
+                $set: { role: role }
+            };
+
+            try {
+                const result = await userCollection.updateOne(filter, updateDoc);
+
+                if (result.matchedCount === 0) {
+                    return res.status(404).send({ message: "User not found" });
+                }
+
+                res.send(result);
+            } catch (error) {
+                console.error("Error updating user role:", error);
+                res.status(500).send({ message: "Internal Server Error" });
+            }
+        });
 
 
         // Books API
@@ -153,7 +179,7 @@ async function run() {
         // Latest Books
         app.get('/latest-books', async (req, res) => {
 
-            const result = await booksCollection.find({}).sort({ createdAt: -1 }).limit(6).toArray();
+            const result = await booksCollection.find({}).sort({ createdAt: -1 }).limit(8).toArray();
             res.send(result);
 
         });
@@ -177,7 +203,7 @@ async function run() {
         })
 
 
-        // Add a book***********
+        // Add a book
         app.post('/my-books', verifyFBToken, async (req, res) => {
             const book = req.body;
             book.createdAt = new Date();
@@ -191,7 +217,7 @@ async function run() {
             });
         });
 
-        // Get all books added by the logged-in librarian*************
+        // Get all books added by the logged-in librarian
         app.get('/my-books', verifyFBToken, async (req, res) => {
             const email = req.decoded_email;
             const books = await booksCollection.find({ addedBy: email }).toArray();
@@ -237,17 +263,14 @@ async function run() {
         });
 
 
-        // Update a book by id************
+        // Update a book by id
         app.patch('/my-books/:id', verifyFBToken, async (req, res) => {
             const { id } = req.params;
             const email = req.decoded_email;
-
-            const { name, author, image, price, status, description } = req.body;
-
+            const { name, author, image, price, status, description, category } = req.body;
             if (!['published', 'unpublished'].includes(status)) {
                 return res.status(400).send({ message: 'Invalid status' });
             }
-
             const result = await booksCollection.updateOne(
                 { _id: new ObjectId(id), addedBy: email },
                 {
@@ -255,8 +278,9 @@ async function run() {
                         name,
                         author,
                         image,
-                        price,
-                        description, 
+                        price: parseFloat(price),
+                        description,
+                        category,
                         status,
                         updatedAt: new Date(),
                     },
@@ -269,7 +293,6 @@ async function run() {
 
             res.send({ success: true });
         });
-
 
         app.get('/librarian/orders', verifyFBToken, async (req, res) => {
             const email = req.decoded_email;
@@ -289,14 +312,10 @@ async function run() {
         app.get('/librarian/orders', verifyFBToken, async (req, res) => {
             try {
                 const email = req.decoded_email;
-
-                // Get all books added by this librarian
                 const books = await booksCollection.find({ addedBy: email }).toArray();
-                const bookIds = books.map(b => b._id.toString());
-
-                // Fetch orders for these books
-                const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
-
+                const bookIds = books.map(book => book._id.toString());
+                const query = { bookId: { $in: bookIds } };
+                const orders = await ordersCollection.find(query).sort({ createdAt: -1 }).toArray();
                 res.send(orders);
             } catch (err) {
                 console.error(err);
@@ -319,7 +338,7 @@ async function run() {
                 return res.status(400).send({ success: false, message: 'Invalid status' });
 
             try {
-              
+
                 const order = await ordersCollection.findOne({ _id: new ObjectId(orderId) });
                 if (!order) {
                     return res.status(404).send({ message: 'Order not found' });
@@ -330,7 +349,7 @@ async function run() {
                     return res.status(403).send({ message: 'Unauthorized' });
                 }
 
-               
+
                 const allowedTransitions = {
                     pending: ['shipped'],
                     shipped: ['delivered'],
@@ -363,7 +382,7 @@ async function run() {
                 return res.status(400).send({ success: false, message: 'Invalid order ID' });
 
             try {
-                // Check if the librarian owns the book for this order
+                
                 const order = await ordersCollection.findOne({ _id: new ObjectId(orderId) });
                 if (!order) {
                     return res.status(404).send({ message: 'Order not found' });
@@ -374,7 +393,7 @@ async function run() {
                     return res.status(403).send({ message: 'Unauthorized' });
                 }
 
-                // Prevent canceling delivered orders
+                
                 if (order.status === 'delivered') {
                     return res.status(400).send({ message: 'Cannot cancel delivered order' });
                 }
@@ -388,7 +407,7 @@ async function run() {
 
 
 
-        // ----------------- Add to Wishlist --------------ঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃঃ
+        // ----------------- Add to Wishlist -------------
         app.post('/wishlist', async (req, res) => {
             const { userId, bookId } = req.body;
             if (!userId || !bookId) return res.status(400).send({ message: 'Missing userId or bookId' });
@@ -543,6 +562,22 @@ async function run() {
             res.send(result);
         })
 
+        app.get('/librarian/:id', verifyFBToken, async (req, res) => {
+            try {
+                const id = req.params.id;
+                const query = { _id: new ObjectId(id) };
+                const result = await librarianCollection.findOne(query);
+
+                if (!result) {
+                    return res.status(404).send({ message: 'Librarian application not found' });
+                }
+
+                res.send(result);
+            } catch (error) {
+                res.status(500).send({ message: 'Server error fetching librarian details' });
+            }
+        });
+
         app.post('/librarian', async (req, res) => {
             const librarian = req.body;
             librarian.status = 'Pending'
@@ -552,27 +587,36 @@ async function run() {
         });
 
         app.patch('/librarian/:id', verifyFBToken, verifyAdmin, async (req, res) => {
-            const status = req.body.status;
+            const { status, email } = req.body; 
             const id = req.params.id;
-            const query = { _id: new ObjectId((id)) }
-            const updateDoc = {
-                $set: {
-                    status: status
+
+            try {
+                const query = { _id: new ObjectId(id) };
+                const updateDoc = {
+                    $set: { status: status }
+                };
+
+              
+                const result = await librarianCollection.updateOne(query, updateDoc);
+
+                if (status === 'Approved' && email) {
+                    const userQuery = { email: email };
+                    const updateUser = {
+                        $set: { role: 'librarian' }
+                    };
+
+                    const userResult = await userCollection.updateOne(userQuery, updateUser);
+
+            
+                    console.log(`Role update for ${email}:`, userResult.modifiedCount > 0 ? "SUCCESS" : "FAILED (User not found)");
                 }
+
+                res.send(result);
+            } catch (error) {
+                console.error("Error updating librarian status:", error);
+                res.status(500).send({ message: "Internal Server Error" });
             }
-            const result = await librarianCollection.updateOne(query, updateDoc);
-            if (status === 'Approved') {
-                const email = req.body.email;
-                const userQuery = { email }
-                const updateUser = {
-                    $set: {
-                        role: 'librarian'
-                    }
-                }
-                const userResult = await userCollection.updateOne(userQuery, updateUser);
-            }
-            res.send(result);
-        })
+        });
 
         app.delete('/librarian/:id', async (req, res) => {
             const id = req.params.id;
@@ -701,9 +745,13 @@ async function run() {
 
         })
 
+
+        // User Dashboard
         app.get("/dashboard/user", verifyFBToken, async (req, res) => {
             try {
                 const email = req.decoded_email;
+                const db = client.db("book_courier_db");
+                const courierCollection = db.collection('courier');
 
                 const data = await courierCollection.aggregate([
                     { $match: { senderEmail: email } },
@@ -714,60 +762,86 @@ async function run() {
                                     $group: {
                                         _id: null,
                                         totalOrders: { $sum: 1 },
-                                        pendingOrders: {
-                                            $sum: { $cond: [{ $eq: ["$paymentStatus", "pending"] }, 1, 0] },
-                                        },
-                                        totalSpent: {
-                                            $sum: { $cond: [{ $eq: ["$paymentStatus", "paid"] }, "$cost", 0] },
-                                        },
-                                    },
-                                },
+                                        pendingOrders: { $sum: { $cond: [{ $eq: ["$paymentStatus", "unpaid"] }, 1, 0] } },
+
+                                        totalSpent: { $sum: { $toDouble: "$cost" } }
+                                    }
+                                }
                             ],
-                            recentOrders: [
-                                { $sort: { createdAt: -1 } },
-                                { $limit: 5 },
+                            spendingByBook: [
+                                {
+                                    $group: {
+                                        _id: "$bookName",
+                                        spent: { $sum: { $toDouble: "$cost" } }
+                                    }
+                                },
+                                { $project: { _id: 0, book: "$_id", spent: 1 } }
+                            ],
+                            ordersByHour: [
+                                {
+                                    $group: {
+                                        _id: { $hour: { $toDate: "$createdAt" } },
+                                        count: { $sum: 1 }
+                                    }
+                                },
                                 {
                                     $project: {
-                                        _id: 1,
-                                        bookName: 1,
-                                        cost: 1,
-                                        paymentStatus: 1,
-                                        createdAt: 1,
-                                    },
+                                        _id: 0,
+                                        hour: { $concat: [{ $toString: "$_id" }, ":00"] },
+                                        orders: "$count"
+                                    }
                                 },
+                                { $sort: { hour: 1 } }
                             ],
-                        },
-                    },
+                            orderHistory: [
+                                { $sort: { createdAt: -1 } },
+                                { $limit: 5 },
+                                { $project: { _id: 1, bookName: 1, date: "$createdAt", amount: "$cost", status: "$paymentStatus" } }
+                            ]
+                        }
+                    }
                 ]).toArray();
 
-                const stats = (data[0] && data[0].stats[0]) || {
-                    totalOrders: 0,
-                    pendingOrders: 0,
-                    totalSpent: 0,
-                };
+                const result = data[0] || {};
 
-                const recentOrders = (data[0] && data[0].recentOrders) || [];
 
-                res.send({ stats, recentOrders });
+                res.send({
+                    stats: result.stats?.[0] || { totalOrders: 0, pendingOrders: 0, totalSpent: 0 },
+                    spendingByBook: result.spendingByBook || [],
+                    ordersByHour: result.ordersByHour || [],
+                    orderHistory: result.orderHistory || []
+                });
+
             } catch (error) {
-                console.error(error);
-                res.status(500).send({ message: "Failed to fetch user dashboard", error: error.message });
+                console.error("Dashboard Error:", error);
+                res.status(500).send({ message: "Failed to fetch user dashboard" });
             }
         });
-
 
 
         app.get('/dashboard/librarian', verifyFBToken, async (req, res) => {
             try {
                 const email = req.decoded_email;
-
-
                 const books = await booksCollection.find({ addedBy: email }).toArray();
                 const bookIds = books.map(b => b._id.toString());
-
-
                 const orders = await ordersCollection.find({ bookId: { $in: bookIds } }).toArray();
+                const categoryData = await booksCollection.aggregate([
+                    { $match: { addedBy: email } },
+                    { $group: { _id: "$category", value: { $sum: 1 } } },
+                    { $project: { name: "$_id", value: 1, _id: 0 } }
+                ]).toArray();
 
+                const booksPerDay = await booksCollection.aggregate([
+                    { $match: { addedBy: email } },
+                    {
+                        $group: {
+                            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+                            count: { $sum: 1 }
+                        }
+                    },
+                    { $sort: { "_id": 1 } },
+                    { $project: { date: "$_id", count: 1, _id: 0 } }
+                ]).toArray();
 
                 const stats = {
                     totalBooks: books.length,
@@ -775,34 +849,16 @@ async function run() {
                     totalRevenue: orders.reduce((sum, o) => sum + Number(o.price || 0), 0),
                 };
 
-
-                const recentOrders = orders
-                    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                    .slice(0, 5)
-                    .map(o => ({
-                        _id: o._id,
-                        bookName: o.bookName,
-                        userName: o.buyerEmail,
-                        price: Number(o.price),
-                        status: o.status,
-                        createdAt: o.createdAt,
-                    }));
-
-
                 const recentBooks = books
                     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
-                    .slice(0, 5)
-                    .map(b => ({
-                        _id: b._id,
-                        title: b.name || b.title,
-                        author: b.author,
-                        price: Number(b.price || 0),
-                        createdAt: b.createdAt,
-                    }));
+                    .slice(0, 5);
 
-                res.send({ stats, recentOrders, recentBooks });
+                res.send({
+                    stats,
+                    recentBooks, 
+                    chartData: { categoryData, booksPerDay }
+                });
             } catch (err) {
-                console.error(err);
                 res.status(500).send({ message: 'Failed to fetch dashboard data' });
             }
         });
@@ -852,11 +908,6 @@ async function run() {
 
 
 
-
-
-
-
-        // Send a ping to confirm a successful connection
         // await client.db("admin").command({ ping: 1 });
         // console.log("Pinged your deployment. You successfully connected to MongoDB!");
     } finally {
